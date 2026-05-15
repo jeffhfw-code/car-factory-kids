@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 const tiles: Array<{ to: string; label: string; emoji: string; color: string }> = [
   { to: '/factory/1', label: 'Start New Build', emoji: '🔧', color: '#3FA9F5' },
   { to: '/garage', label: 'Garage', emoji: '🚗', color: '#FFC93C' },
+  { to: '/race/select', label: 'Race', emoji: '🏁', color: '#3FA9F5' },
   { to: '/notebook', label: 'Notebook', emoji: '📓', color: '#7BC950' },
   { to: '/settings', label: 'Settings', emoji: '⚙️', color: '#FF6B6B' },
 ];
