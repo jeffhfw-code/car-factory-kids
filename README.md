@@ -5,6 +5,18 @@ on ten tracks. Installable on iPad, iPhone, Android, and any modern browser.
 
 > **Phase 1 status:** this is the deployable shell — routing, store, theme,
 > manifest, and CI are in place. Game mechanics arrive in later phases.
+>
+> **Phase 2A status:** the normalized stat model is in. `RaceStats` now uses
+> 0-10 ratings for every race-relevant value (plus `weightLbs`), with eight
+> hidden stats wired in alongside the seven visible ones. A **seed catalog
+> only** lives in `src/data/parts.ts`, `src/data/paints.ts`, and
+> `src/data/sampleBuilds.ts` — three chassis, three engines, three wheel sets,
+> three interiors, three tech parts, eight paint colors, three sample builds.
+> `src/logic/statCalculator.ts` clamps stats, caps tech selections at 3, and
+> returns a `ValidationResult` instead of throwing on bad input.
+> `src/logic/labMeasurement.ts` converts ratings to lab numbers, with a
+> seedable PRNG (`src/utils/random.ts`) so tests are deterministic.
+> The factory/lab/race UI is intentionally deferred to a later phase.
 
 ## Privacy notice
 

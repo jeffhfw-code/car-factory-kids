@@ -1,16 +1,10 @@
 import { create } from 'zustand';
-import { persist, createJSONStorage } from 'zustand/middleware';
+import { persist, createJSONStorage, type StateStorage } from 'zustand/middleware';
+import type { Build } from '../data/types';
 
 export const SAVE_VERSION = 1;
 export const SAVE_KEY = 'cfk_save_v1';
 export const BUILD_SLOT_COUNT = 6;
-
-export interface BuildPlaceholder {
-  id: string;
-  name: string;
-  createdAt: number;
-  lastModified: number;
-}
 
 export interface ProgressState {
   coins: number;
@@ -32,7 +26,7 @@ export interface SettingsState {
 
 export interface SaveData {
   version: typeof SAVE_VERSION;
-  builds: (BuildPlaceholder | null)[];
+  builds: (Build | null)[];
   progress: ProgressState;
   settings: SettingsState;
 }
@@ -41,7 +35,7 @@ export interface GameStore extends SaveData {
   resetProgress: () => void;
 }
 
-const emptyBuilds = (): (BuildPlaceholder | null)[] =>
+const emptyBuilds = (): (Build | null)[] =>
   Array.from({ length: BUILD_SLOT_COUNT }, () => null);
 
 const initialProgress: ProgressState = {
@@ -62,6 +56,31 @@ const initialSettings: SettingsState = {
   sfxVolume: 0.8,
 };
 
+const memoryStorage = (): StateStorage => {
+  const map = new Map<string, string>();
+  return {
+    getItem: (key) => (map.has(key) ? map.get(key)! : null),
+    setItem: (key, value) => {
+      map.set(key, value);
+    },
+    removeItem: (key) => {
+      map.delete(key);
+    },
+  };
+};
+
+const getStorage = (): StateStorage => {
+  if (typeof window === 'undefined') return memoryStorage();
+  try {
+    const probeKey = `${SAVE_KEY}__probe`;
+    window.localStorage.setItem(probeKey, '1');
+    window.localStorage.removeItem(probeKey);
+    return window.localStorage;
+  } catch {
+    return memoryStorage();
+  }
+};
+
 export const useGameStore = create<GameStore>()(
   persist(
     (set) => ({
@@ -80,7 +99,31 @@ export const useGameStore = create<GameStore>()(
     {
       name: SAVE_KEY,
       version: SAVE_VERSION,
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => getStorage()),
+      migrate: (persisted) => {
+        // Phase 2A schema refinement: builds were always (Build | null)[]
+        // with all-nulls in Phase 1, so this is a safe identity migration
+        // that backfills any missing keys.
+        if (!persisted || typeof persisted !== 'object') {
+          return {
+            version: SAVE_VERSION,
+            builds: emptyBuilds(),
+            progress: initialProgress,
+            settings: initialSettings,
+          };
+        }
+        const candidate = persisted as Partial<SaveData>;
+        return {
+          version: SAVE_VERSION,
+          builds:
+            Array.isArray(candidate.builds) &&
+            candidate.builds.length === BUILD_SLOT_COUNT
+              ? (candidate.builds as (Build | null)[])
+              : emptyBuilds(),
+          progress: { ...initialProgress, ...(candidate.progress ?? {}) },
+          settings: { ...initialSettings, ...(candidate.settings ?? {}) },
+        };
+      },
     },
   ),
 );
