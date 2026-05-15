@@ -142,6 +142,23 @@ describe('RaceEngine.updateCarState - curves & sliding', () => {
   });
 });
 
+describe('RaceEngine.updateCarState - restart safety', () => {
+  it('updating a fresh initial state never resurrects a previous finished state', () => {
+    // Repro for the restart race: a tick that fires BETWEEN setCarState(initial)
+    // and the next render must not somehow carry over finished=true. Because
+    // updateCarState is pure, calling it on a fresh initial state must always
+    // produce a fresh, non-finished state — regardless of what previously ran.
+    const finished = runFor(undefined, GAS, 60);
+    expect(finished.finished).toBe(true);
+
+    const fresh = createInitialCarState(SPEED_BUILD, STATS);
+    const afterTick = updateCarState(fresh, STATS, OVAL_TEST_TRACK, COAST, 0.05);
+    expect(afterTick.finished).toBe(false);
+    expect(afterTick.distanceMeters).toBeLessThan(OVAL_TEST_TRACK.lengthMeters);
+    expect(afterTick.finishTimeSeconds).toBe(0);
+  });
+});
+
 describe('RaceEngine.updateCarState - clamping & determinism', () => {
   it('speed is clamped and never becomes negative', () => {
     const start = createInitialCarState(SPEED_BUILD, STATS);
