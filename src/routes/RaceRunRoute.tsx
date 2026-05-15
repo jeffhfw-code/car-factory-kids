@@ -29,8 +29,6 @@ export default function RaceRunRoute() {
   );
 
   const inputRef = useRef<RaceInput>({ gasHeld: false, brakeHeld: false });
-  const stateRef = useRef<CarState | null>(carState);
-  stateRef.current = carState;
   const lastTickRef = useRef<number | null>(null);
   const rafRef = useRef<number | null>(null);
 
@@ -47,11 +45,12 @@ export default function RaceRunRoute() {
       const last = lastTickRef.current ?? now;
       const dt = Math.min(0.1, (now - last) / 1000);
       lastTickRef.current = now;
-      const current = stateRef.current;
-      if (current) {
-        const next = updateCarState(current, stats, track, inputRef.current, dt);
-        if (next !== current) setCarState(next);
-      }
+      // Functional update: always work from the latest committed state, not
+      // a stale ref. This prevents a finished-state from being resurrected
+      // by a tick that fires between Restart's setState and the next render.
+      setCarState((prev) =>
+        prev ? updateCarState(prev, stats, track, inputRef.current, dt) : prev,
+      );
       rafRef.current = window.requestAnimationFrame(tick);
     };
     rafRef.current = window.requestAnimationFrame(tick);
@@ -156,16 +155,8 @@ export default function RaceRunRoute() {
         </section>
       ) : (
         <section style={controlsRowStyle}>
-          <HoldButton
-            label="BRAKE"
-            color="#FF6B6B"
-            onChange={setBrake}
-          />
-          <HoldButton
-            label="GAS"
-            color="#7BC950"
-            onChange={setGas}
-          />
+          <HoldButton label="BRAKE" color="#FF6B6B" onChange={setBrake} />
+          <HoldButton label="GAS" color="#7BC950" onChange={setGas} />
         </section>
       )}
     </main>
@@ -197,6 +188,17 @@ function Stat({
   );
 }
 
+/**
+ * Hold-to-press button that survives iOS Safari's quirks:
+ *  - uses only pointer events (covers mouse, touch, pen on iOS 13+)
+ *  - listens for pointerup/pointercancel at document level so the press
+ *    always releases, even if iOS routes the up event to another element
+ *    (system gestures, swipes off-button, etc.)
+ *  - never calls setPointerCapture (unreliable on iOS touch pointers)
+ *  - never releases on pointerleave (iOS sometimes fires it during a held touch)
+ *  - applies -webkit-user-select / -webkit-touch-callout / tap-highlight CSS
+ *    so long-press doesn't trigger iOS text-selection or callout menu
+ */
 function HoldButton({
   label,
   color,
@@ -207,32 +209,56 @@ function HoldButton({
   onChange: (held: boolean) => void;
 }) {
   const [pressed, setPressed] = useState(false);
-  const press = (held: boolean) => {
-    setPressed(held);
-    onChange(held);
+  const pointerIdRef = useRef<number | null>(null);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+
+  const release = useCallback(() => {
+    pointerIdRef.current = null;
+    setPressed(false);
+    onChangeRef.current(false);
+  }, []);
+
+  // Document-level safety net: if the up/cancel event lands somewhere else
+  // (iOS system gesture, finger lifted off-button, alert popup, etc.), still
+  // release the press so the car doesn't get stuck accelerating.
+  useEffect(() => {
+    if (!pressed) return;
+    const handler = (e: PointerEvent) => {
+      if (pointerIdRef.current == null || e.pointerId === pointerIdRef.current) {
+        release();
+      }
+    };
+    document.addEventListener('pointerup', handler);
+    document.addEventListener('pointercancel', handler);
+    window.addEventListener('blur', release);
+    return () => {
+      document.removeEventListener('pointerup', handler);
+      document.removeEventListener('pointercancel', handler);
+      window.removeEventListener('blur', release);
+    };
+  }, [pressed, release]);
+
+  const press = (pointerId: number) => {
+    pointerIdRef.current = pointerId;
+    setPressed(true);
+    onChangeRef.current(true);
   };
+
   return (
     <button
       type="button"
       onPointerDown={(e) => {
-        e.currentTarget.setPointerCapture?.(e.pointerId);
-        press(true);
+        // Only react to the primary pointer; ignore secondary touches.
+        if (pointerIdRef.current != null) return;
+        press(e.pointerId);
       }}
-      onPointerUp={() => press(false)}
-      onPointerCancel={() => press(false)}
-      onPointerLeave={() => press(false)}
-      onMouseDown={() => press(true)}
-      onMouseUp={() => press(false)}
-      onMouseLeave={() => press(false)}
-      onTouchStart={(e) => {
-        e.preventDefault();
-        press(true);
+      onPointerUp={(e) => {
+        if (e.pointerId === pointerIdRef.current) release();
       }}
-      onTouchEnd={(e) => {
-        e.preventDefault();
-        press(false);
+      onPointerCancel={(e) => {
+        if (e.pointerId === pointerIdRef.current) release();
       }}
-      onTouchCancel={() => press(false)}
       onContextMenu={(e) => e.preventDefault()}
       aria-pressed={pressed}
       style={{
@@ -250,6 +276,10 @@ function HoldButton({
         transform: pressed ? 'translateY(4px)' : 'none',
         transition: 'transform 60ms, box-shadow 60ms',
         touchAction: 'none',
+        userSelect: 'none',
+        WebkitUserSelect: 'none',
+        WebkitTouchCallout: 'none',
+        WebkitTapHighlightColor: 'transparent',
       }}
     >
       {label}
