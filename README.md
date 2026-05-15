@@ -17,6 +17,18 @@ on ten tracks. Installable on iPad, iPhone, Android, and any modern browser.
 > `src/logic/labMeasurement.ts` converts ratings to lab numbers, with a
 > seedable PRNG (`src/utils/random.ts`) so tests are deterministic.
 > The factory/lab/race UI is intentionally deferred to a later phase.
+>
+> **Phase 2B status:** one playable test race exists. From **Home → Race →
+> Start Test Race** you drop into a thin race slice that uses the
+> **Speed Tester** sample build on a single **Oval Test Track** (`src/data/tracks.ts`).
+> A pure, testable race engine (`src/race/engine/`) drives the loop:
+> tap-and-hold GAS / BRAKE buttons (mouse, touch, and pointer events) feed a
+> deterministic 2D physics step that derives top speed, acceleration, braking,
+> coasting, curve safe-speed, and a sliding penalty from the Phase 2A stats.
+> The race screen shows speed, progress, elapsed time, a sliding indicator,
+> a finish message with the final time, and a Restart button. Full car
+> selection, full track selection, AI opponents, Canvas rendering, audio,
+> coins, and the unlock economy are deliberately deferred to later phases.
 
 ## Privacy notice
 
