@@ -1,0 +1,62 @@
+:root {
+  --color-primary: #3fa9f5;
+  --color-accent: #ffc93c;
+  --color-success: #7bc950;
+  --color-danger: #ff6b6b;
+  --color-background: #f4f1ed;
+  --color-ink: #2c3e50;
+  --color-ink-soft: #5b6b7e;
+  --color-surface: #ffffff;
+  --color-surface-muted: #ede7de;
+
+  --radius-sm: 8px;
+  --radius-md: 16px;
+  --radius-lg: 24px;
+  --radius-pill: 999px;
+
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-xxl: 48px;
+
+  color-scheme: light;
+  font-family: 'Nunito', system-ui, -apple-system, sans-serif;
+  font-size: 18px;
+  color: var(--color-ink);
+  background-color: var(--color-background);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  width: 100%;
+  overscroll-behavior: none;
+}
+
+body {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: manipulation;
+}
+
+a {
+  color: var(--color-primary);
+  text-decoration: none;
+  font-weight: 700;
+}
+
+button {
+  font-family: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
