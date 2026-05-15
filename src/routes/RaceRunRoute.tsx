@@ -127,7 +127,10 @@ export default function RaceRunRoute() {
             position: 'absolute',
             left: `${progress * 100}%`,
             top: '50%',
-            transform: 'translate(-50%, -50%)',
+            // The 🏎️ glyph faces left in every shipping emoji set
+            // (Apple, Google, Microsoft, Samsung, Twemoji, etc.), so flip
+            // it horizontally to face the finish line on the right.
+            transform: 'translate(-50%, -50%) scaleX(-1)',
             fontSize: 56,
             transition: 'left 80ms linear',
           }}
