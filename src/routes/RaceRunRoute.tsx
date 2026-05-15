@@ -45,9 +45,6 @@ export default function RaceRunRoute() {
       const last = lastTickRef.current ?? now;
       const dt = Math.min(0.1, (now - last) / 1000);
       lastTickRef.current = now;
-      // Functional update: always work from the latest committed state, not
-      // a stale ref. This prevents a finished-state from being resurrected
-      // by a tick that fires between Restart's setState and the next render.
       setCarState((prev) =>
         prev ? updateCarState(prev, stats, track, inputRef.current, dt) : prev,
       );
@@ -108,33 +105,36 @@ export default function RaceRunRoute() {
         <Stat label="Time" value={`${elapsedDisplay}s`} />
         <Stat
           label="Status"
-          value={
-            finished
-              ? 'FINISHED'
-              : carState.isSliding
-                ? 'SLIDING!'
-                : 'racing'
-          }
-          tone={
-            finished ? 'success' : carState.isSliding ? 'danger' : 'default'
-          }
+          value={finished ? 'FINISHED' : 'racing'}
+          tone={finished ? 'success' : 'default'}
         />
       </section>
 
       <section style={raceLaneStyle} aria-label="Race progress">
+        {/*
+          The car visual is a non-directional colored disc. We deliberately
+          do NOT use the 🏎️ emoji here: on every major platform that emoji
+          renders facing left, which made the car appear to drive in reverse
+          as the disc slid left-to-right with progress. A circle has no
+          inherent orientation.
+        */}
         <div
+          data-testid="race-car-marker"
           style={{
             position: 'absolute',
             left: `${progress * 100}%`,
             top: '50%',
-            transform: 'translate(-50%, -50%)',
-            fontSize: 56,
+            width: 48,
+            height: 48,
+            marginLeft: -24,
+            marginTop: -24,
+            borderRadius: '50%',
+            background: '#3FA9F5',
+            boxShadow: '0 4px 0 rgba(0,0,0,0.18), inset 0 -6px 0 rgba(0,0,0,0.12)',
             transition: 'left 80ms linear',
           }}
           aria-hidden
-        >
-          🏎️
-        </div>
+        />
         <div style={finishMarkerStyle} aria-hidden>🏁</div>
       </section>
 
@@ -189,15 +189,24 @@ function Stat({
 }
 
 /**
- * Hold-to-press button that survives iOS Safari's quirks:
- *  - uses only pointer events (covers mouse, touch, pen on iOS 13+)
- *  - listens for pointerup/pointercancel at document level so the press
- *    always releases, even if iOS routes the up event to another element
- *    (system gestures, swipes off-button, etc.)
- *  - never calls setPointerCapture (unreliable on iOS touch pointers)
- *  - never releases on pointerleave (iOS sometimes fires it during a held touch)
- *  - applies -webkit-user-select / -webkit-touch-callout / tap-highlight CSS
- *    so long-press doesn't trigger iOS text-selection or callout menu
+ * Hold-to-press button hardened for real iOS Safari.
+ *
+ * We attach NATIVE event listeners (not React synthetic events) for one
+ * reason: React adds touch listeners as passive by default, which makes
+ * `e.preventDefault()` inside onTouchStart a no-op. Without preventDefault
+ * iOS Safari can:
+ *   - dispatch a synthesized mousedown ~300ms later (double-fires the press)
+ *   - treat a held finger as a "tap" that ends with a synthesized mouseup
+ *   - fire `pointercancel` on tiny finger movement, which would kill the press
+ *
+ * The native listener is registered with `{ passive: false }` so we can
+ * actually preventDefault. We also stick to touch + mouse events and avoid
+ * pointer events entirely: touchstart/touchend on iOS are far more reliable
+ * for a tap-and-hold control than pointer events.
+ *
+ * A document-level mouseup/touchend listener acts as a safety net so the
+ * press always releases — even if the user lifts off-button, the system
+ * grabs focus, or iOS routes the up event elsewhere.
  */
 function HoldButton({
   label,
@@ -209,58 +218,87 @@ function HoldButton({
   onChange: (held: boolean) => void;
 }) {
   const [pressed, setPressed] = useState(false);
-  const pointerIdRef = useRef<number | null>(null);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
 
-  const release = useCallback(() => {
-    pointerIdRef.current = null;
-    setPressed(false);
-    onChangeRef.current(false);
-  }, []);
-
-  // Document-level safety net: if the up/cancel event lands somewhere else
-  // (iOS system gesture, finger lifted off-button, alert popup, etc.), still
-  // release the press so the car doesn't get stuck accelerating.
   useEffect(() => {
-    if (!pressed) return;
-    const handler = (e: PointerEvent) => {
-      if (pointerIdRef.current == null || e.pointerId === pointerIdRef.current) {
-        release();
-      }
-    };
-    document.addEventListener('pointerup', handler);
-    document.addEventListener('pointercancel', handler);
-    window.addEventListener('blur', release);
-    return () => {
-      document.removeEventListener('pointerup', handler);
-      document.removeEventListener('pointercancel', handler);
-      window.removeEventListener('blur', release);
-    };
-  }, [pressed, release]);
+    const btn = buttonRef.current;
+    if (!btn) return;
 
-  const press = (pointerId: number) => {
-    pointerIdRef.current = pointerId;
-    setPressed(true);
-    onChangeRef.current(true);
-  };
+    let active = false;
+    let touchActive = false;
+
+    const press = () => {
+      if (active) return;
+      active = true;
+      setPressed(true);
+      onChangeRef.current(true);
+    };
+    const release = () => {
+      if (!active) return;
+      active = false;
+      touchActive = false;
+      setPressed(false);
+      onChangeRef.current(false);
+    };
+
+    const onTouchStart = (e: TouchEvent) => {
+      e.preventDefault(); // block iOS mouse synthesis + 300ms tap delay
+      touchActive = true;
+      press();
+    };
+    const onTouchEnd = (e: TouchEvent) => {
+      e.preventDefault();
+      release();
+    };
+    const onTouchCancel = () => release();
+
+    const onMouseDown = (e: MouseEvent) => {
+      if (e.button !== 0) return;
+      // If a touch is already active, ignore the synthesized mouse event so
+      // we don't trip an extra press.
+      if (touchActive) return;
+      press();
+    };
+    const onWindowMouseUp = () => release();
+    const onWindowTouchEnd = (e: TouchEvent) => {
+      // Document-level safety net: covers off-button releases.
+      // We do NOT preventDefault here because the touch may belong to a
+      // different element entirely.
+      if (active && e.touches.length === 0) release();
+    };
+    const onBlur = () => release();
+
+    btn.addEventListener('touchstart', onTouchStart, { passive: false });
+    btn.addEventListener('touchend', onTouchEnd, { passive: false });
+    btn.addEventListener('touchcancel', onTouchCancel);
+    btn.addEventListener('mousedown', onMouseDown);
+    window.addEventListener('mouseup', onWindowMouseUp);
+    window.addEventListener('touchend', onWindowTouchEnd);
+    window.addEventListener('touchcancel', onTouchCancel);
+    window.addEventListener('blur', onBlur);
+
+    return () => {
+      release();
+      btn.removeEventListener('touchstart', onTouchStart);
+      btn.removeEventListener('touchend', onTouchEnd);
+      btn.removeEventListener('touchcancel', onTouchCancel);
+      btn.removeEventListener('mousedown', onMouseDown);
+      window.removeEventListener('mouseup', onWindowMouseUp);
+      window.removeEventListener('touchend', onWindowTouchEnd);
+      window.removeEventListener('touchcancel', onTouchCancel);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, []);
 
   return (
     <button
+      ref={buttonRef}
       type="button"
-      onPointerDown={(e) => {
-        // Only react to the primary pointer; ignore secondary touches.
-        if (pointerIdRef.current != null) return;
-        press(e.pointerId);
-      }}
-      onPointerUp={(e) => {
-        if (e.pointerId === pointerIdRef.current) release();
-      }}
-      onPointerCancel={(e) => {
-        if (e.pointerId === pointerIdRef.current) release();
-      }}
       onContextMenu={(e) => e.preventDefault()}
       aria-pressed={pressed}
+      aria-label={label}
       style={{
         flex: 1,
         minHeight: 160,

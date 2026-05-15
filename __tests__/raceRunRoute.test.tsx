@@ -43,6 +43,19 @@ function pumpTicks(count: number, dtMs = 50) {
   });
 }
 
+function readStat(label: string): string {
+  const el = screen.getByText(label).nextSibling as HTMLElement;
+  return el.textContent ?? '';
+}
+
+function progressPct(): number {
+  return parseFloat(readStat('Progress'));
+}
+
+function speedMph(): number {
+  return parseFloat(readStat('Speed'));
+}
+
 describe('RaceRunRoute', () => {
   it('mounts the playable race for the oval test track without crashing', () => {
     renderAt('/race/run/oval-test-track');
@@ -52,44 +65,84 @@ describe('RaceRunRoute', () => {
     expect(screen.getByRole('button', { name: 'BRAKE' })).toBeTruthy();
   });
 
+  it('starts with speed 0 and progress 0%, marker on the left', () => {
+    renderAt('/race/run/oval-test-track');
+    expect(speedMph()).toBe(0);
+    expect(progressPct()).toBe(0);
+    const marker = screen.getByTestId('race-car-marker') as HTMLElement;
+    expect(marker.style.left).toBe('0%');
+  });
+
   it('shows a not-found screen for an unknown track', () => {
     renderAt('/race/run/does-not-exist');
     expect(screen.getByText('Track not found')).toBeTruthy();
   });
 
-  it('holding GAS via pointerdown advances the speed and progress', () => {
+  it('holding GAS via mousedown increases displayed speed and progress', () => {
     renderAt('/race/run/oval-test-track');
     const gas = screen.getByRole('button', { name: 'GAS' });
 
-    fireEvent.pointerDown(gas, { pointerId: 1 });
+    fireEvent.mouseDown(gas, { button: 0 });
     pumpTicks(40, 50); // 2 seconds of game time
     expect(gas.getAttribute('aria-pressed')).toBe('true');
 
-    const speedEl = screen.getByText('Speed').nextSibling as HTMLElement;
-    const progressEl = screen.getByText('Progress').nextSibling as HTMLElement;
-    expect(parseFloat(speedEl.textContent ?? '0')).toBeGreaterThan(10);
-    expect(parseFloat(progressEl.textContent ?? '0')).toBeGreaterThan(0);
+    expect(speedMph()).toBeGreaterThan(10);
+    expect(progressPct()).toBeGreaterThan(0);
 
-    fireEvent.pointerUp(gas, { pointerId: 1 });
+    fireEvent.mouseUp(window);
     expect(gas.getAttribute('aria-pressed')).toBe('false');
   });
 
-  it('release on document pointerup still works (iOS-style off-button release)', () => {
+  it('holding BRAKE never reverses the displayed progress', () => {
     renderAt('/race/run/oval-test-track');
     const gas = screen.getByRole('button', { name: 'GAS' });
+    const brake = screen.getByRole('button', { name: 'BRAKE' });
 
-    fireEvent.pointerDown(gas, { pointerId: 7 });
+    // Warm up some forward motion.
+    fireEvent.mouseDown(gas, { button: 0 });
+    pumpTicks(40, 50);
+    fireEvent.mouseUp(window);
+
+    const progressAfterGas = progressPct();
+    expect(progressAfterGas).toBeGreaterThan(0);
+
+    // Hold BRAKE for a long time. Progress should plateau (forward momentum
+    // bleeds out) but it must NEVER go down.
+    fireEvent.mouseDown(brake, { button: 0 });
+    let prev = progressAfterGas;
+    for (let i = 0; i < 20; i++) {
+      pumpTicks(20, 50); // 1s chunks
+      const cur = progressPct();
+      expect(cur).toBeGreaterThanOrEqual(prev);
+      prev = cur;
+    }
+    fireEvent.mouseUp(window);
+
+    // And speed must have hit zero.
+    expect(speedMph()).toBe(0);
+  });
+
+  it('BRAKE at zero speed cannot push progress backward', () => {
+    renderAt('/race/run/oval-test-track');
+    const brake = screen.getByRole('button', { name: 'BRAKE' });
+    expect(progressPct()).toBe(0);
+    fireEvent.mouseDown(brake, { button: 0 });
+    pumpTicks(100, 50); // 5s of full braking from a standstill
+    fireEvent.mouseUp(window);
+    expect(speedMph()).toBe(0);
+    expect(progressPct()).toBe(0);
+    const marker = screen.getByTestId('race-car-marker') as HTMLElement;
+    expect(marker.style.left).toBe('0%');
+  });
+
+  it('document-level mouseup safety net releases the press', () => {
+    // Repro for "press stays stuck when finger lifts off-button": even if the
+    // release event lands somewhere other than the button, the press must end.
+    renderAt('/race/run/oval-test-track');
+    const gas = screen.getByRole('button', { name: 'GAS' });
+    fireEvent.mouseDown(gas, { button: 0 });
     expect(gas.getAttribute('aria-pressed')).toBe('true');
-
-    // Pointerup that lands on document, not on the button (e.g., iOS gesture
-    // or finger lifted off-button). The safety-net listener must still
-    // release the press. jsdom doesn't construct PointerEvent, so build a
-    // plain Event with the pointerId field the handler reads.
-    act(() => {
-      const ev = new Event('pointerup', { bubbles: true });
-      Object.assign(ev, { pointerId: 7 });
-      document.dispatchEvent(ev);
-    });
+    fireEvent.mouseUp(document.body);
     expect(gas.getAttribute('aria-pressed')).toBe('false');
   });
 
@@ -98,43 +151,38 @@ describe('RaceRunRoute', () => {
     const gas = screen.getByRole('button', { name: 'GAS' });
     const brake = screen.getByRole('button', { name: 'BRAKE' });
 
-    fireEvent.pointerDown(gas, { pointerId: 1 });
+    fireEvent.mouseDown(gas, { button: 0 });
     pumpTicks(40, 50);
-    fireEvent.pointerUp(gas, { pointerId: 1 });
-
-    const speedEl = screen.getByText('Speed').nextSibling as HTMLElement;
-    const before = parseFloat(speedEl.textContent ?? '0');
+    fireEvent.mouseUp(window);
+    const before = speedMph();
     expect(before).toBeGreaterThan(20);
 
-    fireEvent.pointerDown(brake, { pointerId: 2 });
+    fireEvent.mouseDown(brake, { button: 0 });
     pumpTicks(20, 50);
-    fireEvent.pointerUp(brake, { pointerId: 2 });
-
-    const after = parseFloat(speedEl.textContent ?? '0');
-    expect(after).toBeLessThan(before);
+    fireEvent.mouseUp(window);
+    expect(speedMph()).toBeLessThan(before);
   });
 
-  it('race finishes at 100% and the Restart Race button resets state', () => {
+  it('race finishes at 100% and Restart Race resets everything', () => {
     renderAt('/race/run/oval-test-track');
     const gas = screen.getByRole('button', { name: 'GAS' });
 
-    fireEvent.pointerDown(gas, { pointerId: 1 });
-    // Long enough to reach 800m for the Speed Tester (~18s of game time).
+    fireEvent.mouseDown(gas, { button: 0 });
+    // Enough ticks for Speed Tester to cover 800m.
     pumpTicks(600, 50);
 
     expect(screen.getByText('Race finished!')).toBeTruthy();
-    const progressEl = screen.getByText('Progress').nextSibling as HTMLElement;
-    expect(progressEl.textContent).toBe('100%');
+    expect(progressPct()).toBe(100);
 
     const restart = screen.getByRole('button', { name: /Restart Race/ });
     fireEvent.click(restart);
 
-    // After restart, GAS/BRAKE return and the readouts reset.
     expect(screen.queryByText('Race finished!')).toBeNull();
     expect(screen.getByRole('button', { name: 'GAS' })).toBeTruthy();
-    const speedEl = screen.getByText('Speed').nextSibling as HTMLElement;
-    const progressEl2 = screen.getByText('Progress').nextSibling as HTMLElement;
-    expect(speedEl.textContent).toBe('0 mph');
-    expect(progressEl2.textContent).toBe('0%');
+    expect(speedMph()).toBe(0);
+    expect(progressPct()).toBe(0);
+    expect(readStat('Time')).toBe('0.00s');
+    const marker = screen.getByTestId('race-car-marker') as HTMLElement;
+    expect(marker.style.left).toBe('0%');
   });
 });

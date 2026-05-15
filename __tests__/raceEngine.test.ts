@@ -4,6 +4,7 @@ import {
   isRaceFinished,
   updateCarState,
 } from '../src/race/engine/RaceEngine';
+import { getRaceProgress } from '../src/race/engine/TrackMath';
 import type { RaceInput } from '../src/race/engine/CarState';
 import { OVAL_TEST_TRACK } from '../src/data/tracks';
 import { SAMPLE_BUILDS_BY_ID } from '../src/data/sampleBuilds';
@@ -93,52 +94,103 @@ describe('RaceEngine.updateCarState - distance & finish', () => {
   });
 });
 
-describe('RaceEngine.updateCarState - curves & sliding', () => {
-  it('curve overspeed triggers sliding penalty', () => {
-    // Force the car onto the first curve at high speed.
+describe('RaceEngine.updateCarState - no-reverse guarantees', () => {
+  // Phase 2B physics is intentionally non-decreasing on distance: GAS, BRAKE,
+  // and COAST must never move the car backward. These tests pin that contract.
+
+  it('BRAKE at zero speed cannot create negative speed', () => {
     const start = createInitialCarState(SPEED_BUILD, STATS);
-    const onCurve = {
-      ...start,
-      distanceMeters: 300, // inside first curve (250-400)
-      currentSegmentIndex: 1,
-      speedMph: 200, // way over any safe speed
-    };
-    const after = updateCarState(onCurve, STATS, OVAL_TEST_TRACK, GAS, 0.05);
-    expect(after.isSliding).toBe(true);
-    expect(after.speedMph).toBeLessThan(onCurve.speedMph);
+    const after = updateCarState(start, STATS, OVAL_TEST_TRACK, BRAKE, 5);
+    expect(after.speedMph).toBe(0);
+    expect(after.speedMph).toBeGreaterThanOrEqual(0);
   });
 
-  it('better gripRating allows higher safe curve speed', () => {
-    const lowGripStats: RaceStats = { ...STATS, gripRating: 1, stabilityRating: 1 };
-    const highGripStats: RaceStats = { ...STATS, gripRating: 10, stabilityRating: 10 };
+  it('BRAKE at zero speed does not move the car backward', () => {
+    const start = createInitialCarState(SPEED_BUILD, STATS);
+    let s = start;
+    for (let i = 0; i < 50; i++) {
+      s = updateCarState(s, STATS, OVAL_TEST_TRACK, BRAKE, 0.05);
+    }
+    expect(s.distanceMeters).toBe(0);
+    expect(s.distanceMeters).toBeGreaterThanOrEqual(0);
+  });
 
-    // Place each car on the curve at a moderate speed and observe.
-    const seed = (s: RaceStats) => ({
-      ...createInitialCarState(SPEED_BUILD, s),
-      distanceMeters: 300,
-      currentSegmentIndex: 1,
-      speedMph: 60,
-    });
-
-    const lowAfter = updateCarState(
-      seed(lowGripStats),
-      lowGripStats,
-      OVAL_TEST_TRACK,
+  it('distance never decreases across an update under any input', () => {
+    // Spin up some speed, then sweep through every combination of inputs and
+    // assert distance is monotonic over each step. This catches any future
+    // change that would let brake/coast/curve math push distance backward.
+    const inputs: RaceInput[] = [
+      GAS,
+      BRAKE,
       COAST,
-      0.05,
-    );
-    const highAfter = updateCarState(
-      seed(highGripStats),
-      highGripStats,
-      OVAL_TEST_TRACK,
-      COAST,
-      0.05,
-    );
+      { gasHeld: true, brakeHeld: true },
+    ];
+    let s = createInitialCarState(SPEED_BUILD, STATS);
+    // Warm up to a non-zero speed.
+    for (let i = 0; i < 40; i++) {
+      s = updateCarState(s, STATS, OVAL_TEST_TRACK, GAS, 0.05);
+    }
+    for (const input of inputs) {
+      let cur = s;
+      for (let i = 0; i < 200; i++) {
+        const next = updateCarState(cur, STATS, OVAL_TEST_TRACK, input, 0.05);
+        expect(next.distanceMeters).toBeGreaterThanOrEqual(cur.distanceMeters);
+        cur = next;
+      }
+    }
+  });
 
-    // Low grip: 60mph exceeds safe speed -> sliding.
-    expect(lowAfter.isSliding).toBe(true);
-    // High grip: 60mph is within safe speed -> not sliding.
-    expect(highAfter.isSliding).toBe(false);
+  it('BRAKE while accelerated keeps progress non-decreasing', () => {
+    // Hold both GAS and BRAKE simultaneously after picking up speed: brake
+    // wins, speed drops to 0, but progress must never go down.
+    let s = createInitialCarState(SPEED_BUILD, STATS);
+    for (let i = 0; i < 40; i++) {
+      s = updateCarState(s, STATS, OVAL_TEST_TRACK, GAS, 0.05);
+    }
+    let prevDistance = s.distanceMeters;
+    expect(prevDistance).toBeGreaterThan(0);
+    for (let i = 0; i < 200; i++) {
+      s = updateCarState(
+        s,
+        STATS,
+        OVAL_TEST_TRACK,
+        { gasHeld: true, brakeHeld: true },
+        0.05,
+      );
+      expect(s.distanceMeters).toBeGreaterThanOrEqual(prevDistance);
+      prevDistance = s.distanceMeters;
+    }
+    expect(s.speedMph).toBe(0);
+  });
+
+  it('progress starts at 0 and clamps at 1', () => {
+    const start = createInitialCarState(SPEED_BUILD, STATS);
+    expect(getRaceProgress(start.distanceMeters, OVAL_TEST_TRACK)).toBe(0);
+
+    // Floor the gas until well past the finish line.
+    let s = start;
+    for (let i = 0; i < 2000; i++) {
+      s = updateCarState(s, STATS, OVAL_TEST_TRACK, GAS, 0.05);
+    }
+    const progress = getRaceProgress(s.distanceMeters, OVAL_TEST_TRACK);
+    expect(progress).toBeLessThanOrEqual(1);
+    expect(progress).toBe(1);
+  });
+
+  it('Restart (createInitialCarState) resets speed/distance/progress/elapsed/finished', () => {
+    // Reach a finished state, then "restart" by reconstructing the initial
+    // state — this mirrors what the route does on the Restart Race click.
+    const finished = runFor(undefined, GAS, 60);
+    expect(finished.finished).toBe(true);
+    expect(finished.distanceMeters).toBe(OVAL_TEST_TRACK.lengthMeters);
+
+    const restarted = createInitialCarState(SPEED_BUILD, STATS);
+    expect(restarted.speedMph).toBe(0);
+    expect(restarted.distanceMeters).toBe(0);
+    expect(restarted.elapsedSeconds).toBe(0);
+    expect(restarted.finished).toBe(false);
+    expect(restarted.finishTimeSeconds).toBe(0);
+    expect(getRaceProgress(restarted.distanceMeters, OVAL_TEST_TRACK)).toBe(0);
   });
 });
 

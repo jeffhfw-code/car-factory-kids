@@ -4,7 +4,6 @@ import {
   MPH_TO_MPS,
   getCurrentSegmentIndex,
   getRaceProgress,
-  safeSpeedForSegment,
   topSpeedFromStats,
 } from './TrackMath';
 
@@ -69,6 +68,9 @@ function stepOnce(
     };
   }
 
+  // Phase 2B physics: deliberately simple, deterministic, monotonic.
+  // No curve/sliding/segment penalty — kept off until we have a working
+  // playable race slice that can't go in reverse.
   const top = topSpeedFromStats(stats);
   let speed = carState.speedMph;
 
@@ -83,24 +85,15 @@ function stepOnce(
     speed -= coastMphPerSec * dt;
   }
 
+  // Speed is clamped to [0, top]. It can never be negative.
   if (speed > top) speed = top;
   if (speed < MIN_SPEED_MPH) speed = MIN_SPEED_MPH;
 
-  const segIdx = getCurrentSegmentIndex(carState.distanceMeters, track);
-  const segment = track.segments[segIdx];
-  const safeSpeed = safeSpeedForSegment(segment, stats);
-
-  let isSliding = false;
-  if (Number.isFinite(safeSpeed) && speed > safeSpeed) {
-    const overshoot = speed - safeSpeed;
-    const penaltyPerSec = overshoot * 1.5 + 5;
-    speed -= penaltyPerSec * dt;
-    if (speed < MIN_SPEED_MPH) speed = MIN_SPEED_MPH;
-    isSliding = true;
-  }
-
+  // Distance only accumulates positive (speed * dt). Since speed >= 0 and
+  // dt > 0, distance is strictly non-decreasing across every step.
   const speedMps = speed * MPH_TO_MPS;
   let distance = carState.distanceMeters + speedMps * dt;
+  if (distance < 0) distance = 0;
 
   const energyDecayPerMeter = 0.005;
   const energy = Math.max(
@@ -125,7 +118,7 @@ function stepOnce(
     finished,
     finishTimeSeconds: finishTime,
     energyRemaining: energy,
-    isSliding,
+    isSliding: false,
     currentSegmentIndex: getCurrentSegmentIndex(distance, track),
     elapsedSeconds: elapsed,
   };
